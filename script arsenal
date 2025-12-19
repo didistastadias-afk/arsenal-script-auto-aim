@@ -1,0 +1,180 @@
+-- AIM LOCK + ESP + VISIBILITY (FINAL)
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local mouse = player:GetMouse()
+local camera = workspace.CurrentCamera
+
+-- SETTINGS
+local TOGGLE_KEY = Enum.KeyCode.P
+local MAX_DISTANCE = 450
+local SMOOTHNESS = 0.12
+local PREDICTION_TIME = 0.13
+
+local aimEnabled = false
+local targetPart = nil
+
+-- ESP cache
+local highlights = {}
+local boxes = {}
+
+------------------------------------------------
+-- MUSUH CHECK
+------------------------------------------------
+local function isEnemy(character)
+	local plr = Players:GetPlayerFromCharacter(character)
+	if not plr then return true end -- NPC = musuh
+	return plr.Team ~= player.Team
+end
+
+------------------------------------------------
+-- VISIBILITY CHECK (RAYCAST)
+------------------------------------------------
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+local function isVisible(part)
+	if not part then return false end
+
+	rayParams.FilterDescendantsInstances = {
+		player.Character,
+		part.Parent
+	}
+
+	local origin = camera.CFrame.Position
+	local direction = part.Position - origin
+	local result = workspace:Raycast(origin, direction, rayParams)
+
+	if result then
+		return result.Instance:IsDescendantOf(part.Parent)
+	end
+	return true
+end
+
+------------------------------------------------
+-- ESP FUNCTIONS
+------------------------------------------------
+local function addESP(character)
+	if highlights[character] then return end
+
+	-- Highlight (outline tubuh)
+	local h = Instance.new("Highlight")
+	h.Adornee = character
+	h.Parent = character
+	h.FillTransparency = 0.8
+	h.OutlineTransparency = 0
+	h.OutlineColor = Color3.fromRGB(255, 50, 50)
+	h.FillColor = Color3.fromRGB(255, 0, 0)
+	highlights[character] = h
+
+	-- Box ESP
+	local box = Instance.new("BoxHandleAdornment")
+	box.Adornee = character:FindFirstChild("HumanoidRootPart")
+	box.Size = Vector3.new(4, 6, 2)
+	box.Color3 = Color3.fromRGB(255, 0, 0)
+	box.Transparency = 0.6
+	box.AlwaysOnTop = true
+	box.ZIndex = 10
+	box.Parent = character
+	boxes[character] = box
+end
+
+local function removeESP(character)
+	if highlights[character] then
+		highlights[character]:Destroy()
+		highlights[character] = nil
+	end
+	if boxes[character] then
+		boxes[character]:Destroy()
+		boxes[character] = nil
+	end
+end
+
+------------------------------------------------
+-- TARGET SELECTION (VISIBLE ONLY)
+------------------------------------------------
+local function getClosestVisibleEnemy()
+	local closest = nil
+	local shortest = MAX_DISTANCE
+
+	for _, model in pairs(workspace:GetChildren()) do
+		if model:IsA("Model")
+			and model ~= player.Character
+			and isEnemy(model) then
+
+			local humanoid = model:FindFirstChild("Humanoid")
+			local head = model:FindFirstChild("Head")
+			local root = model:FindFirstChild("HumanoidRootPart")
+
+			if humanoid and humanoid.Health > 0 and head and root then
+				if isVisible(head) then
+					addESP(model)
+
+					local pos, onScreen =
+						camera:WorldToViewportPoint(head.Position)
+
+					if onScreen then
+						local dist =
+							(Vector2.new(pos.X, pos.Y)
+							- Vector2.new(mouse.X, mouse.Y)).Magnitude
+
+						if dist < shortest then
+							shortest = dist
+							closest = head
+						end
+					end
+				else
+					removeESP(model)
+				end
+			else
+				removeESP(model)
+			end
+		end
+	end
+
+	return closest
+end
+
+------------------------------------------------
+-- TOGGLE P
+------------------------------------------------
+UserInputService.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if input.KeyCode == TOGGLE_KEY then
+		aimEnabled = not aimEnabled
+		targetPart = nil
+
+		if not aimEnabled then
+			for char in pairs(highlights) do
+				removeESP(char)
+			end
+		end
+	end
+end)
+
+------------------------------------------------
+-- AIM LOOP
+------------------------------------------------
+RunService.RenderStepped:Connect(function()
+	if not aimEnabled then return end
+
+	if not targetPart
+		or not targetPart.Parent
+		or not isVisible(targetPart) then
+
+		targetPart = getClosestVisibleEnemy()
+	end
+
+	if targetPart then
+		local velocity = targetPart.AssemblyLinearVelocity
+		local predictedPos =
+			targetPart.Position + (velocity * PREDICTION_TIME)
+
+		local camCF = camera.CFrame
+		local targetCF = CFrame.new(camCF.Position, predictedPos)
+
+		camera.CFrame = camCF:Lerp(targetCF, SMOOTHNESS)
+	end
+end)
